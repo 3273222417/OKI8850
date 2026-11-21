@@ -15,7 +15,7 @@ read -p "是否启用susfs？(y/n，默认：y): " APPLY_SUSFS
 APPLY_SUSFS=${APPLY_SUSFS:-y}
 read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，默认：n): " USE_PATCH_LINUX
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
-read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
+read -p "KSU分支版本(r=BakaSU, y=SukiSU-Nova, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
@@ -35,7 +35,7 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
-  KSU_TYPE="SukiSU Ultra"
+  KSU_TYPE="SukiSU-Nova"
 elif [[ "$KSU_BRANCH" == "r" || "$KSU_BRANCH" == "R" ]]; then
   KSU_TYPE="BakaSU"
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
@@ -82,7 +82,7 @@ SU() {
 SU apt-mark hold firefox && apt-mark hold libc-bin && apt-mark hold man-db
 SU rm -rf /var/lib/man-db/auto-update
 SU apt-get update
-SU apt-get install --no-install-recommends -y curl bison flex clang binutils dwarves git lld pahole zip perl make gcc python3 python-is-python3 bc libssl-dev libelf-dev libdw-dev cpio xz-utils tar unzip aria2
+SU apt-get install --no-install-recommends -y curl jq bison flex clang binutils dwarves git lld pahole zip perl make gcc python3 python-is-python3 bc libssl-dev libelf-dev libdw-dev cpio xz-utils tar unzip aria2
 
 # ===== 初始化仓库 =====
 echo ">>> 初始化仓库..."
@@ -132,8 +132,12 @@ sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
 echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
 
 # ===== 拉取 KSU 并设置版本号 =====
-if [[ $KSU_BRANCH == [yYrR] ]]; then
-  echo ">>> 拉取 BakaSU 并设置版本（由于SukiSU长期未维护无法正常编译，且BakaSU兼容sukisu管理器，故SukiSU源码仓库已重定向为bakasu）..."
+if [[ "$KSU_BRANCH" == [yY] ]]; then
+  NOVA_SUSFS=false
+  [[ "$APPLY_SUSFS" != [yY] ]] || NOVA_SUSFS=true
+  bash "$SCRIPT_DIR/../scripts/setup_sukisu.sh" "$PWD" "$NOVA_SUSFS"
+elif [[ "$KSU_BRANCH" == [rR] ]]; then
+  echo ">>> 拉取 BakaSU 并设置版本..."
   curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
@@ -162,7 +166,9 @@ fi
 # ===== 克隆补丁仓库&应用 SUSFS 补丁 =====
 cd "$WORKDIR/kernel_workspace"
 echo ">>> 应用 SUSFS&hook 补丁..."
-if [[ "$APPLY_SUSFS" == [yY] ]]; then
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_SUSFS" == [yY] ]]; then
+  bash "$SCRIPT_DIR/../scripts/apply_sukisu_susfs.sh" "$PWD"
+elif [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo ">>> 克隆补丁仓库..."
   git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android16-6.12
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch ./common/
@@ -240,7 +246,11 @@ echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$DEFCONFIG_FILE"
 # 开启O2编译优化配置
 echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$DEFCONFIG_FILE"
 #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
-echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
+if [[ "$KSU_BRANCH" == [yY] ]]; then
+  echo "CONFIG_HEADERS_INSTALL=y" >> "$DEFCONFIG_FILE"
+else
+  echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
+fi
 
 # 应用 CVE_2026_43499 修复补丁
 cd common
@@ -445,7 +455,27 @@ make -j$(nproc --all) \
     RUSTC="rustc" \
     OBJCOPY="llvm-objcopy" \
     O=out \
-    gki_defconfig Image 2>&1 | tee $WORKDIR/build.log
+    gki_defconfig
+if [[ "$KSU_BRANCH" == [yY] ]]; then
+  make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$CLANG_DIR/clang" HOSTCC="$CLANG_DIR/clang" LD=ld.lld HOSTLD=ld.lld RUSTC="rustc" O=out headers_install
+  test -s out/usr/include/linux/unistd.h
+fi
+set -o pipefail
+make -j$(nproc --all) \
+    LLVM=1 \
+    ARCH=arm64 \
+    CROSS_COMPILE=aarch64-linux-gnu- \
+    CC="$CLANG_DIR/clang" \
+    HOSTCC="$CLANG_DIR/clang" \
+    LD=ld.lld \
+    HOSTLD=ld.lld \
+    RUSTC="rustc" \
+    OBJCOPY="llvm-objcopy" \
+    O=out \
+    Image 2>&1 | tee "$WORKDIR/build.log"
+if [[ "$KSU_BRANCH" == [yY] ]]; then
+  bash "$SCRIPT_DIR/../scripts/verify_sukisu_build.sh" "$NOVA_SUSFS"
+fi
 echo ">>> 内核编译成功！"
 
 # ===== 选择使用 patch_linux (KPM补丁)=====
