@@ -441,6 +441,7 @@ KCFLAGS+=" -fdebug-prefix-map=$ROOT_REAL_PATH=."
 KCFLAGS+=" -fmacro-prefix-map=$ROOT_REAL_PATH=."
 KCFLAGS+=" -ffile-prefix-map=$ROOT_REAL_PATH=."
 export KCFLAGS
+export KLEAF_INTERNAL_NO_BUILD_CONFIG=1 KERNEL_DIR=.
 source "./_setup_env.sh" 2>/dev/null || true
 echo "KCFLAGS=$KCFLAGS"
 
