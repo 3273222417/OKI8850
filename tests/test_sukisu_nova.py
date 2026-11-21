@@ -69,6 +69,12 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("out/usr/include/linux/unistd.h", run)
                 self.assertLess(run.index("headers_install"), run.index("O=out Image"))
 
+    def test_kleaf_environment_source_is_compatible_with_nounset(self):
+        for path, workflow in self.workflows:
+            with self.subTest(workflow=path.name):
+                run = run_step(workflow, 'source "./_setup_env.sh"')["run"]
+                self.assertIn('set +u\nsource "./_setup_env.sh" 2>/dev/null || true\nset -u', run)
+
     def test_manager_and_source_evidence_artifacts_exist(self):
         for path, workflow in self.workflows:
             with self.subTest(workflow=path.name):
