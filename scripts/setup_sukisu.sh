@@ -150,6 +150,7 @@ if git -C "$WORKSPACE/KernelSU" cat-file -e refs/remotes/origin/builtin^{commit}
 fi
 python3 "$SCRIPT_DIR/prepare_sukisu.py" "$WORKSPACE" --susfs "$SUSFS" \
   --version "$VERSION" --count "$COUNT" --ref "$MAIN_COMMIT" --tag "$manager_name"
+bash "$SCRIPT_DIR/apply_sukisu_kernel_compat.sh" "$WORKSPACE"
 
 mkdir -p "$WORKSPACE/manager-artifacts"
 manager_asset_line="$(head -n 1 <<< "$assets")"

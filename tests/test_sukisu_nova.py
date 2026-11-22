@@ -69,6 +69,18 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("out/usr/include/linux/unistd.h", run)
                 self.assertLess(run.index("headers_install"), run.index("O=out Image"))
 
+    def test_kernel_compatibility_resolves_builtin_source_root(self):
+        script = read("scripts/apply_sukisu_kernel_compat.sh")
+        self.assertIn("KSU_KERNEL_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))", script)
+        self.assertIn("struct lsm_id ksu_lsm_id", read("scripts/sukisu-lsm-id-6.8.patch"))
+        self.assertIn("test -s \"$runner\"", script)
+        self.assertIn("KSU_ENABLED", script)
+
+    def test_setup_runs_kernel_compatibility_after_source_prepare(self):
+        script = read("scripts/setup_sukisu.sh")
+        self.assertLess(script.index('prepare_sukisu.py'), script.index('apply_sukisu_kernel_compat.sh'))
+        self.assertIn('bash "$SCRIPT_DIR/apply_sukisu_kernel_compat.sh" "$WORKSPACE"', script)
+
     def test_kleaf_environment_source_is_compatible_with_nounset(self):
         for path, workflow in self.workflows:
             with self.subTest(workflow=path.name):
