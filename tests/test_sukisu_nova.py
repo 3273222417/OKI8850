@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import yaml
@@ -112,6 +113,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("drivers/block/zram/zram.ko", text)
                 self.assertIn("scripts/package_zram_module.sh", text)
                 self.assertIn("scripts/adapt_zram_zstd_backend.py", text)
+                self.assertIn("scripts/apply_compression_6.12.sh", text)
                 self.assertIn("scripts/fetch_companion_modules.sh", text)
                 self.assertIn("上传 SUSFS 模块", text)
                 self.assertIn("上传 NoMount 模块", text)
@@ -146,6 +148,7 @@ class LocalBuilderTests(unittest.TestCase):
                 self.assertIn("drivers/block/zram/zram.ko", text)
                 self.assertIn("scripts/package_zram_module.sh", text)
                 self.assertIn("scripts/adapt_zram_zstd_backend.py", text)
+                self.assertIn("scripts/apply_compression_6.12.sh", text)
                 self.assertIn("scripts/fetch_companion_modules.sh", text)
 
     def test_companion_source_is_not_pinned_to_old_susfs_branch(self):
@@ -156,6 +159,39 @@ class LocalBuilderTests(unittest.TestCase):
 
 
 class DynamicManagerTests(unittest.TestCase):
+    def test_zstd_patch_normalizer_drops_only_the_vendor_satisfied_hunk(self):
+        script = ROOT / "scripts/normalize_zstd_patch.py"
+        patch = """diff --git a/lib/zstd/common/portability_macros.h b/lib/zstd/common/portability_macros.h
+@@ -55,7 +56,7 @@
+ #ifndef DYNAMIC_BMI2
+   #if ((defined(__clang__) && __has_attribute(__target__)) \\
+       || (defined(__GNUC__) \\
+-          && (__GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)))) \\
++          && (__GNUC__ >= 11))) \\
+       && (defined(__x86_64__) || defined(_M_X64)) \\
+       && !defined(__BMI2__)
+ #  define DYNAMIC_BMI2 1
+@@ -90,1 +91,1 @@
+ #define ZSTD_ENABLE_ASM_X86_64_BMI2 0
+diff --git a/other.h b/other.h
+@@ -1,1 +1,2 @@
+ one
++two
+"""
+        new_header = "#if ((defined(__GNUC__) && (__GNUC__ >= 11)))\n"
+        with tempfile.TemporaryDirectory() as temp:
+            patch_path = Path(temp) / "patch.diff"
+            header_path = Path(temp) / "portability_macros.h"
+            patch_path.write_text(patch, encoding="utf-8")
+            header_path.write_text(new_header, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script), str(patch_path), str(header_path)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertNotIn("@@ -55,7 +56,7 @@", result.stdout)
+            self.assertIn("@@ -90,1 +91,1 @@", result.stdout)
+            self.assertIn("diff --git a/other.h b/other.h", result.stdout)
+
     def test_zstd_157_adapter_removes_legacy_zram_api_calls(self):
         from tempfile import TemporaryDirectory
 

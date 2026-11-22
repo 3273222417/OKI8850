@@ -196,12 +196,7 @@ cd "$WORKDIR/kernel_workspace"
 # ===== 应用 LZ4 & ZSTD 补丁 =====
 if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
   echo ">>> 正在添加lz4 1.10.0 & zstd 1.5.7补丁..."
-  git clone --depth=1 https://github.com/cctv18/oppo_oplus_realme_sm8850.git
-  cp ./oppo_oplus_realme_sm8850/zram_patch/001-lz4.patch ./common/
-  cp ./oppo_oplus_realme_sm8850/zram_patch/002-zstd.patch ./common/
-  cd "$WORKDIR/kernel_workspace/common"
-  patch -p1 -F 3 < 001-lz4.patch || true
-  patch -p1 -F 3 < 002-zstd.patch || true
+  bash "$SCRIPT_DIR/../scripts/apply_compression_6.12.sh" "$WORKDIR/kernel_workspace/common"
   python3 "$SCRIPT_DIR/../scripts/adapt_zram_zstd_backend.py" "$WORKDIR/kernel_workspace/common"
   cd "$WORKDIR/kernel_workspace"
 else
