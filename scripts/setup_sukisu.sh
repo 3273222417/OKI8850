@@ -14,14 +14,40 @@ esac
 test -d "$WORKSPACE/common/drivers"
 test ! -e "$WORKSPACE/KernelSU" || { echo 'KernelSU already exists; use a clean workspace' >&2; exit 1; }
 
-# Keep history for the commit-count version formula, but omit blobs until the
-# selected main/builtin checkout is needed. This is materially faster on CI.
-if ! git clone --filter=blob:none --no-tags --no-checkout --single-branch --branch main \
-  "$SUKISU_REPOSITORY" "$WORKSPACE/KernelSU"; then
-  rm -rf "$WORKSPACE/KernelSU"
-  git clone --no-tags --no-checkout --single-branch --branch main \
-    "$SUKISU_REPOSITORY" "$WORKSPACE/KernelSU"
-fi
+retry_git() {
+  local attempt
+  for attempt in 1 2 3 4; do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 4 ]]; then
+      echo "Git operation failed; retrying in $((attempt * 5))s ($attempt/4): $*" >&2
+      sleep "$((attempt * 5))"
+    fi
+  done
+  return 1
+}
+
+# Keep the complete main history for the CI version formula and fetch all
+# blobs up front. A blobless partial clone can fail later during checkout when
+# a transient upstream TLS error interrupts Git's implicit promisor fetch.
+clone_main() {
+  local attempt
+  for attempt in 1 2 3 4; do
+    if git clone --no-tags --no-checkout --single-branch --branch main \
+      "$SUKISU_REPOSITORY" "$WORKSPACE/KernelSU"; then
+      return 0
+    fi
+    rm -rf -- "$WORKSPACE/KernelSU"
+    if [[ "$attempt" -lt 4 ]]; then
+      echo "SukiSU clone failed; retrying in $((attempt * 5))s ($attempt/4)" >&2
+      sleep "$((attempt * 5))"
+    fi
+  done
+  return 1
+}
+
+clone_main || { echo 'Unable to clone SukiSU-Nova main after 4 attempts' >&2; exit 1; }
 CURRENT_MAIN_COMMIT="$(git -C "$WORKSPACE/KernelSU" rev-parse refs/remotes/origin/main)"
 git -C "$WORKSPACE/KernelSU" cat-file -e "$CURRENT_MAIN_COMMIT^{commit}"
 test "$(git -C "$WORKSPACE/KernelSU" rev-parse --is-shallow-repository)" = false
@@ -33,11 +59,8 @@ manager_tag=''
 manager_target=''
 manager_release_url="$SUKISU_CI_FALLBACK_RELEASE_URL"
 refresh_main() {
-  if ! git -C "$WORKSPACE/KernelSU" fetch --filter=blob:none --no-tags origin \
-    "+refs/heads/main:refs/remotes/origin/main"; then
-    git -C "$WORKSPACE/KernelSU" fetch --no-tags origin \
-      "+refs/heads/main:refs/remotes/origin/main" || return 1
-  fi
+  retry_git git -C "$WORKSPACE/KernelSU" fetch --no-tags origin \
+    "+refs/heads/main:refs/remotes/origin/main" || return 1
   CURRENT_MAIN_COMMIT="$(git -C "$WORKSPACE/KernelSU" rev-parse refs/remotes/origin/main)" || return 1
   git -C "$WORKSPACE/KernelSU" cat-file -e "$CURRENT_MAIN_COMMIT^{commit}" || return 1
 }
@@ -130,11 +153,11 @@ else
 fi
 
 if ! git -C "$WORKSPACE/KernelSU" cat-file -e "refs/remotes/origin/$BRANCH^{commit}" 2>/dev/null; then
-  if ! git -C "$WORKSPACE/KernelSU" fetch --filter=blob:none --no-tags origin \
-    "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"; then
-    git -C "$WORKSPACE/KernelSU" fetch --no-tags origin \
-      "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-  fi
+  retry_git git -C "$WORKSPACE/KernelSU" fetch --no-tags origin \
+    "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || {
+      echo "Unable to fetch SukiSU-Nova $BRANCH after 4 attempts" >&2
+      exit 1
+    }
 fi
 if [[ "$BRANCH" == main ]]; then
   # Pair the main checkout with the exact commit represented by the Manager.

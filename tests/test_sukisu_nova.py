@@ -113,6 +113,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(script.index('prepare_sukisu.py'), script.index('apply_sukisu_kernel_compat.sh'))
         self.assertIn('bash "$SCRIPT_DIR/apply_sukisu_kernel_compat.sh" "$WORKSPACE"', script)
 
+    def test_sukisu_checkout_fetches_blobs_up_front_and_retries_network_failures(self):
+        script = read("scripts/setup_sukisu.sh")
+        self.assertIn("git clone --no-tags --no-checkout --single-branch --branch main", script)
+        self.assertNotIn("--filter=blob:none", script)
+        self.assertIn("retry_git()", script)
+        self.assertIn("for attempt in 1 2 3 4", script)
+        self.assertIn("retry_git git -C \"$WORKSPACE/KernelSU\" fetch --no-tags origin", script)
+
     def test_kleaf_environment_source_is_compatible_with_nounset(self):
         for path, workflow in self.workflows:
             with self.subTest(workflow=path.name):
