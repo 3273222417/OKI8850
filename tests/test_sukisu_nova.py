@@ -70,6 +70,37 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("out/usr/include/linux/unistd.h", run)
                 self.assertLess(run.index("headers_install"), run.index("O=out Image"))
 
+    def test_image_config_evidence_is_captured_before_followup_module_build(self):
+        for path, workflow in self.workflows:
+            with self.subTest(workflow=path.name):
+                run = run_step(workflow, "O=out Image")["run"]
+                image_build = run.index("O=out Image")
+                config_snapshot = run.index("cp out/.config ../build-evidence/kernel.config")
+                zram_modules = run.index("drivers/block/zram/zram.ko")
+                self.assertLess(image_build, config_snapshot)
+                self.assertLess(config_snapshot, zram_modules)
+
+    def test_image_config_verifier_reports_first_config_difference(self):
+        import gzip
+        import importlib.util
+
+        script = ROOT / "scripts/verify_image_config.py"
+        spec = importlib.util.spec_from_file_location("verify_image_config", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        embedded = b"CONFIG_FIRST=y\nCONFIG_SECOND=y\n"
+        image = bytearray(64)
+        image[56:60] = b"ARM\x64"
+        image.extend(module.START + gzip.compress(embedded, mtime=0) + module.END)
+        with tempfile.TemporaryDirectory() as temp:
+            image_path = Path(temp) / "Image"
+            config_path = Path(temp) / "kernel.config"
+            image_path.write_bytes(image)
+            config_path.write_bytes(b"CONFIG_FIRST=y\nCONFIG_SECOND=n\n")
+            with self.assertRaisesRegex(ValueError, "first differing line 2"):
+                module.verify(image_path, config_path)
+
     def test_kernel_compatibility_resolves_builtin_source_root(self):
         script = read("scripts/apply_sukisu_kernel_compat.sh")
         self.assertIn("KSU_KERNEL_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))", script)

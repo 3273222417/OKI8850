@@ -704,6 +704,7 @@ jobs:
           fi
           export CC="$(pwd)/cc-wrapper" && export LD="$(pwd)/ld-wrapper" &&
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image
+          cp out/.config ../build-evidence/kernel.config
           if [[ "${{ inputs.ksu_type }}" == "sukisu" && "${{ inputs.lz4_enable }}" == "true" ]]; then
             # Keep zram and zsmalloc as loadable modules for the companion ZIP.
             make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out drivers/block/zram/zram.ko mm/zsmalloc.ko
@@ -711,7 +712,6 @@ jobs:
           if [[ "${{ inputs.ksu_type }}" == "sukisu" ]]; then
             bash "$GITHUB_WORKSPACE/scripts/verify_sukisu_build.sh" "${{ inputs.susfs_enable }}" "${{ inputs.use_nomount }}"
           fi
-          cp out/.config ../build-evidence/kernel.config
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"

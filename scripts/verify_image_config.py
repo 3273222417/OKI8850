@@ -2,6 +2,7 @@
 """Verify the embedded IKCONFIG of an uncompressed arm64 kernel Image."""
 
 import argparse
+import hashlib
 from pathlib import Path
 import zlib
 
@@ -41,8 +42,28 @@ def embedded_config(image: bytes) -> bytes:
 
 
 def verify(image: Path, expected: Path) -> None:
-    if embedded_config(image.read_bytes()) != expected.read_bytes():
-        raise ValueError(f"embedded IKCONFIG in {image} differs from {expected}")
+    embedded = embedded_config(image.read_bytes())
+    expected_bytes = expected.read_bytes()
+    if embedded == expected_bytes:
+        return
+
+    embedded_lines = embedded.splitlines()
+    expected_lines = expected_bytes.splitlines()
+    line_number = next(
+        (index + 1 for index, (left, right) in enumerate(zip(embedded_lines, expected_lines))
+         if left != right),
+        min(len(embedded_lines), len(expected_lines)) + 1,
+    )
+    embedded_line = embedded_lines[line_number - 1] if line_number <= len(embedded_lines) else b"<EOF>"
+    expected_line = expected_lines[line_number - 1] if line_number <= len(expected_lines) else b"<EOF>"
+    raise ValueError(
+        f"embedded IKCONFIG in {image} differs from {expected}; "
+        f"first differing line {line_number}: image={embedded_line!r}, "
+        f"evidence={expected_line!r}; "
+        f"sizes image={len(embedded)} evidence={len(expected_bytes)}; "
+        f"sha256 image={hashlib.sha256(embedded).hexdigest()} "
+        f"evidence={hashlib.sha256(expected_bytes).hexdigest()}"
+    )
 
 
 def main() -> None:
