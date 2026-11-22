@@ -75,6 +75,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      use_nomount:
+        description: '是否集成 NoMount 挂载元模块（同时上传配套模块）'
+        required: true
+        type: boolean
+        default: 'true'
       baseband_guard:
         description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
         required: true
@@ -376,7 +381,8 @@ jobs:
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
           if [[ "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
-            echo "CONFIG_ZSMALLOC=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_ZRAM=m" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_ZSMALLOC=m" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_CRYPTO_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -393,6 +399,10 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
           #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
           if [[ "${{ inputs.ksu_type }}" == "sukisu" ]]; then echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig; else echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig; fi
+          if [[ "${{ inputs.ksu_type }}" == "sukisu" && "${{ inputs.lz4_enable }}" == "true" ]]; then
+            echo "CONFIG_ZRAM=m" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_ZSMALLOC=m" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
           # 6.12内核Rust配置
           echo "CONFIG_RUST=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_ANDROID_BINDER_IPC_RUST=m" >> ./common/arch/arm64/configs/gki_defconfig
@@ -474,6 +484,10 @@ jobs:
               echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> ./common/arch/arm64/configs/gki_defconfig
             fi
           fi
+
+      - name: 集成 NoMount 挂载元模块
+        if: inputs.ksu_type == 'sukisu' && inputs.use_nomount
+        run: bash "$GITHUB_WORKSPACE/scripts/setup_nomount.sh" "$PWD/kernel_workspace"
 
       - name: 启用 Droidspaces 容器支持
         run: |
@@ -601,6 +615,7 @@ jobs:
           echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
           
           cd kernel_workspace/common
+          mkdir -p ../build-evidence
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
           chmod 777 ./*.so
@@ -693,9 +708,14 @@ jobs:
           fi
           export CC="$(pwd)/cc-wrapper" && export LD="$(pwd)/ld-wrapper" &&
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image
-          if [[ "${{ inputs.ksu_type }}" == "sukisu" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/verify_sukisu_build.sh" "${{ inputs.susfs_enable }}"
+          if [[ "${{ inputs.ksu_type }}" == "sukisu" && "${{ inputs.lz4_enable }}" == "true" ]]; then
+            # Keep zram and zsmalloc as loadable modules for the companion ZIP.
+            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out drivers/block/zram/zram.ko mm/zsmalloc.ko
           fi
+          if [[ "${{ inputs.ksu_type }}" == "sukisu" ]]; then
+            bash "$GITHUB_WORKSPACE/scripts/verify_sukisu_build.sh" "${{ inputs.susfs_enable }}" "${{ inputs.use_nomount }}"
+          fi
+          cp out/.config ../build-evidence/kernel.config
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -732,7 +752,25 @@ jobs:
           ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
           rm -f Image
           mv oImage Image
+
+      - name: 核对待打包镜像的内嵌配置
+        run: |
+          cd kernel_workspace
+          python3 "$GITHUB_WORKSPACE/scripts/verify_image_config.py" \
+            common/out/arch/arm64/boot/Image build-evidence/kernel.config
           
+      - name: 打包匹配的 LZ4/ZSTD ZRAM 模块
+        if: ${{ success() && inputs.ksu_type == 'sukisu' && inputs.lz4_enable }}
+        run: |
+          cd kernel_workspace
+          mkdir -p companion-artifacts
+          grep -Fxq 'CONFIG_ZRAM=m' common/out/.config
+          grep -Fxq 'CONFIG_ZSMALLOC=m' common/out/.config
+          bash "$GITHUB_WORKSPACE/scripts/package_zram_module.sh" \
+            common "companion-artifacts/zram-lz4-1.10.0-zstd-1.5.7-${KSUVER}.zip" \
+            "${KSUVER}"
+          printf 'ZRAM_MODULE_VERSION=%s\n' "$KSUVER" >> companion-artifacts/companion-source.txt
+
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
         run: |
@@ -798,6 +836,7 @@ jobs:
           echo "ADIOS: ${{ github.event.inputs.adios_enable }}" >> ./ak3.log
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
+          echo "NoMount: ${{ github.event.inputs.use_nomount }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
 
       - name: 上传 Ccache 调试日志
@@ -813,6 +852,26 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/AnyKernel*.zip
           archive: false
 
+      - name: 获取配套模块
+        if: ${{ success() && inputs.ksu_type == 'sukisu' }}
+        id: companions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/fetch_companion_modules.sh" \
+            "$PWD/kernel_workspace/companion-artifacts" "${{ inputs.use_nomount }}"
+
+      - name: 上传 Nova 构建证据
+        if: ${{ success() && inputs.ksu_type == 'sukisu' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sm8850-sukisu-nova-evidence
+          path: |
+            kernel_workspace/sukisu-source.txt
+            kernel_workspace/build-evidence/
+            kernel_workspace/companion-artifacts/companion-source.txt
+          if-no-files-found: error
+
       - name: 上传 SukiSU-Nova 管理器
         if: ${{ success() && inputs.ksu_type == 'sukisu' }}
         uses: actions/upload-artifact@v7
@@ -821,14 +880,28 @@ jobs:
           path: kernel_workspace/manager-artifacts/*.apk
           if-no-files-found: error
 
-      - name: 上传 SukiSU-Nova 构建证据
+      - name: 上传 SUSFS 模块
         if: ${{ success() && inputs.ksu_type == 'sukisu' }}
         uses: actions/upload-artifact@v7
         with:
-          name: sm8850-sukisu-nova-evidence
-          path: |
-            kernel_workspace/sukisu-source.txt
-            kernel_workspace/manager-artifacts/*.apk
+          name: ${{ steps.companions.outputs.susfs_artifact_name }}
+          path: kernel_workspace/companion-artifacts/${{ steps.companions.outputs.susfs_file }}
+          if-no-files-found: error
+
+      - name: 上传 NoMount 模块
+        if: ${{ success() && inputs.ksu_type == 'sukisu' && inputs.use_nomount }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.companions.outputs.nomount_artifact_name }}
+          path: kernel_workspace/companion-artifacts/${{ steps.companions.outputs.nomount_file }}
+          if-no-files-found: error
+
+      - name: 上传 LZ4/ZSTD ZRAM 模块
+        if: ${{ success() && inputs.ksu_type == 'sukisu' && inputs.lz4_enable }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: zram-lz4-1.10.0-zstd-1.5.7-${{ steps.ksu_version.outputs.ksuver }}
+          path: kernel_workspace/companion-artifacts/zram-lz4-1.10.0-zstd-1.5.7-${{ steps.ksu_version.outputs.ksuver }}.zip
           if-no-files-found: error
 
   release:

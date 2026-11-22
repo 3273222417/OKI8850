@@ -100,6 +100,23 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("manager-artifacts/*.apk", paths)
                 self.assertIn("sukisu-source.txt", paths)
 
+    def test_companion_modules_are_built_fetched_and_uploaded_separately(self):
+        for path, workflow in self.workflows:
+            with self.subTest(workflow=path.name):
+                text = path.read_text(encoding="utf-8")
+                inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+                self.assertIn("use_nomount", inputs)
+                self.assertIn("scripts/setup_nomount.sh", text)
+                self.assertIn("CONFIG_ZRAM=m", text)
+                self.assertIn("CONFIG_ZSMALLOC=m", text)
+                self.assertIn("drivers/block/zram/zram.ko", text)
+                self.assertIn("scripts/package_zram_module.sh", text)
+                self.assertIn("scripts/fetch_companion_modules.sh", text)
+                self.assertIn("上传 SUSFS 模块", text)
+                self.assertIn("上传 NoMount 模块", text)
+                self.assertIn("上传 LZ4/ZSTD ZRAM 模块", text)
+                self.assertIn("companion-artifacts/companion-source.txt", text)
+
 
 class LocalBuilderTests(unittest.TestCase):
     def test_all_local_builders_route_nova_separately(self):
@@ -116,6 +133,24 @@ class LocalBuilderTests(unittest.TestCase):
                 self.assertIn('O=out headers_install', text)
                 self.assertIn('verify_sukisu_build.sh" "$NOVA_SUSFS"', text)
                 self.assertRegex(text, r'if \[\[ "\$KSU_BRANCH" == \[yY\] \]\]; then\s+NOVA_SUSFS=false')
+
+    def test_local_builders_package_companion_modules(self):
+        builders = sorted((ROOT / "local").glob("builder_6.12*.sh"))
+        for path in builders:
+            with self.subTest(builder=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("APPLY_NOMOUNT", text)
+                self.assertIn("scripts/setup_nomount.sh", text)
+                self.assertIn("CONFIG_ZRAM=m", text)
+                self.assertIn("drivers/block/zram/zram.ko", text)
+                self.assertIn("scripts/package_zram_module.sh", text)
+                self.assertIn("scripts/fetch_companion_modules.sh", text)
+
+    def test_companion_source_is_not_pinned_to_old_susfs_branch(self):
+        sources = read("scripts/sukisu_sources.env")
+        self.assertIn("SUSFS_MODULE_BRANCH=", sources)
+        self.assertIn("SUSFS_MODULE_ARTIFACT_PREFIX=release-", sources)
+        self.assertNotIn("SUSFS_MODULE_BRANCH=v1.5.2+", sources)
 
 
 class DynamicManagerTests(unittest.TestCase):

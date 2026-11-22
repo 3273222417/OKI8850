@@ -31,6 +31,8 @@ read -p "是否启用ADIOS调度器？(y/n，默认：y): " APPLY_ADIOS
 APPLY_ADIOS=${APPLY_ADIOS:-y}
 read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
+read -p "是否集成NoMount挂载元模块？(y/n，默认：y): " APPLY_NOMOUNT
+APPLY_NOMOUNT=${APPLY_NOMOUNT:-y}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 
@@ -60,6 +62,7 @@ echo "应用 BBR 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
+echo "启用NoMount: $APPLY_NOMOUNT"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "===================="
 echo
@@ -180,6 +183,9 @@ else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
 cd "$WORKDIR/kernel_workspace"
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_NOMOUNT" == [yY] ]]; then
+  bash "$SCRIPT_DIR/../scripts/setup_nomount.sh" "$PWD"
+fi
 if [[ "$KSU_BRANCH" == [kK] && "$APPLY_SUSFS" == [yY] ]]; then
   cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
   cd ./KernelSU
@@ -251,6 +257,10 @@ if [[ "$KSU_BRANCH" == [yY] ]]; then
 else
   echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
 fi
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_LZ4" == [yY] ]]; then
+  echo "CONFIG_ZRAM=m" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_ZSMALLOC=m" >> "$DEFCONFIG_FILE"
+fi
 
 # 应用 CVE_2026_43499 修复补丁（新版内核源码已应用补丁，无需再应用）
 # cd common
@@ -265,7 +275,8 @@ echo "CONFIG_ANDROID_BINDER_IPC_RUST=m" >> ./common/arch/arm64/configs/gki_defco
 # 仅在启用了 LZ4KD 补丁时添加相关算法支持
 if [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
   cat >> "$DEFCONFIG_FILE" <<EOF
-CONFIG_ZSMALLOC=y
+CONFIG_ZRAM=m
+CONFIG_ZSMALLOC=m
 CONFIG_CRYPTO_LZ4HC=y
 CONFIG_CRYPTO_LZ4K=y
 CONFIG_CRYPTO_LZ4KD=y
@@ -475,8 +486,11 @@ make -j$(nproc --all) \
     OBJCOPY="llvm-objcopy" \
     O=out \
     Image 2>&1 | tee "$WORKDIR/build.log"
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_LZ4" == [yY] ]]; then
+  make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$CLANG_DIR/clang" HOSTCC="$CLANG_DIR/clang" LD=ld.lld HOSTLD=ld.lld RUSTC="rustc" O=out drivers/block/zram/zram.ko mm/zsmalloc.ko
+fi
 if [[ "$KSU_BRANCH" == [yY] ]]; then
-  bash "$SCRIPT_DIR/../scripts/verify_sukisu_build.sh" "$NOVA_SUSFS"
+  bash "$SCRIPT_DIR/../scripts/verify_sukisu_build.sh" "$NOVA_SUSFS" "$([[ "$APPLY_NOMOUNT" == [yY] ]] && echo true || echo false)"
 fi
 echo ">>> 内核编译成功！"
 
@@ -493,6 +507,20 @@ if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   rm -f Image
   mv oImage Image
   echo ">>> 已成功打上KP-N补丁!"
+fi
+
+python3 "$SCRIPT_DIR/../scripts/verify_image_config.py" \
+  "$OUT_DIR/Image" "$WORKDIR/kernel_workspace/common/out/.config"
+
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_LZ4" == [yY] ]]; then
+  NOVA_VERSION="$(awk -F= '$1 == "KSUVER" {print $2; exit}' "$WORKDIR/kernel_workspace/sukisu-source.txt")"
+  test -n "$NOVA_VERSION"
+  mkdir -p "$WORKDIR/kernel_workspace/companion-artifacts"
+  bash "$SCRIPT_DIR/../scripts/package_zram_module.sh" \
+    "$WORKDIR/kernel_workspace/common" \
+    "$WORKDIR/kernel_workspace/companion-artifacts/zram-lz4-1.10.0-zstd-1.5.7-${NOVA_VERSION}.zip" \
+    "$NOVA_VERSION"
+  printf 'ZRAM_MODULE_VERSION=%s\n' "$NOVA_VERSION" >> "$WORKDIR/kernel_workspace/companion-artifacts/companion-source.txt"
 fi
 
 # ===== 克隆并打包 AnyKernel3 =====
@@ -548,6 +576,9 @@ fi
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbg"
 fi
+if [[ "$KSU_BRANCH" == [yY] && "$APPLY_NOMOUNT" == [yY] ]]; then
+  ZIP_NAME="${ZIP_NAME}-nomount"
+fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
 
@@ -557,3 +588,8 @@ zip -r "../$ZIP_NAME" ./*
 
 ZIP_PATH="$(realpath "../$ZIP_NAME")"
 echo ">>> 打包完成 文件所在目录: $ZIP_PATH"
+if [[ "$KSU_BRANCH" == [yY] ]]; then
+  GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}" bash "$SCRIPT_DIR/../scripts/fetch_companion_modules.sh" \
+    "$WORKDIR/kernel_workspace/companion-artifacts" \
+    "$([[ "$APPLY_NOMOUNT" == [yY] ]] && echo true || echo false)"
+fi

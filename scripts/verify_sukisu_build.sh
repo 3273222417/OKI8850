@@ -4,7 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/sukisu_sources.env"
 SUSFS="${1:?SUSFS true or false required}"
+NOMOUNT="${2:-false}"
 case "$SUSFS" in true|false) ;; *) exit 1 ;; esac
+case "$NOMOUNT" in true|false) ;; *) exit 1 ;; esac
 
 grep -qx 'CONFIG_KSU=y' out/.config
 grep -qx 'CONFIG_HEADERS_INSTALL=y' out/.config
@@ -20,6 +22,10 @@ else
 fi
 if grep -qx 'CONFIG_KPM=y' out/.config; then
   echo 'SukiSU-Nova builtin KPM should stay disabled when independent KPatch-Next is used' >&2
+  exit 1
+fi
+if [[ "$NOMOUNT" == true ]] && ! grep -qx 'CONFIG_NOMOUNT=y' out/.config; then
+  echo 'NoMount was requested but CONFIG_NOMOUNT is not enabled' >&2
   exit 1
 fi
 test -s out/usr/include/linux/unistd.h
