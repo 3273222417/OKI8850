@@ -111,6 +111,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("CONFIG_ZSMALLOC=m", text)
                 self.assertIn("drivers/block/zram/zram.ko", text)
                 self.assertIn("scripts/package_zram_module.sh", text)
+                self.assertIn("scripts/adapt_zram_zstd_backend.py", text)
                 self.assertIn("scripts/fetch_companion_modules.sh", text)
                 self.assertIn("上传 SUSFS 模块", text)
                 self.assertIn("上传 NoMount 模块", text)
@@ -144,6 +145,7 @@ class LocalBuilderTests(unittest.TestCase):
                 self.assertIn("CONFIG_ZRAM=m", text)
                 self.assertIn("drivers/block/zram/zram.ko", text)
                 self.assertIn("scripts/package_zram_module.sh", text)
+                self.assertIn("scripts/adapt_zram_zstd_backend.py", text)
                 self.assertIn("scripts/fetch_companion_modules.sh", text)
 
     def test_companion_source_is_not_pinned_to_old_susfs_branch(self):
@@ -154,6 +156,34 @@ class LocalBuilderTests(unittest.TestCase):
 
 
 class DynamicManagerTests(unittest.TestCase):
+    def test_zstd_157_adapter_removes_legacy_zram_api_calls(self):
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp:
+            backend = Path(temp) / "drivers/block/zram/backend_zstd.c"
+            backend.parent.mkdir(parents=True)
+            backend.write_text(
+                "struct zstd_params { zstd_custom_mem custom_mem; zstd_cdict *cdict; };\n"
+                "zstd_get_cparams(params); zstd_compress_using_cdict(ctx);\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [sys.executable, str(ROOT / "scripts/adapt_zram_zstd_backend.py"), temp],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            adapted = backend.read_text(encoding="utf-8")
+            for legacy in (
+                "zstd_custom_mem",
+                "zstd_cdict",
+                "zstd_get_cparams",
+                "zstd_compress_using_cdict",
+            ):
+                self.assertNotIn(legacy, adapted)
+            self.assertIn("zstd_cctx_workspace_bound", adapted)
+            self.assertIn("-EOPNOTSUPP", adapted)
+
     def test_asset_parser_filters_and_prefers_current_release(self):
         page = r'''<script type="application/json">
         {"path":"/shirkneko/sukisu-result/-/releases/download/manager-ci/SukiSU_Nova_v3.0.0-r1_35066-x86_64-release.apk"}

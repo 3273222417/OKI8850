@@ -341,6 +341,7 @@ jobs:
           cd ./common
           patch -p1 -F 3 < 001-lz4.patch || true
           patch -p1 -F 3 < 002-zstd.patch || true
+          python3 "$GITHUB_WORKSPACE/scripts/adapt_zram_zstd_backend.py" "$PWD"
 
       - name: 应用 lz4kd 补丁
         if: inputs.lz4kd_enable

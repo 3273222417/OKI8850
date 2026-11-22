@@ -202,6 +202,7 @@ if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
   cd "$WORKDIR/kernel_workspace/common"
   patch -p1 -F 3 < 001-lz4.patch || true
   patch -p1 -F 3 < 002-zstd.patch || true
+  python3 "$SCRIPT_DIR/../scripts/adapt_zram_zstd_backend.py" "$WORKDIR/kernel_workspace/common"
   cd "$WORKDIR/kernel_workspace"
 else
   echo ">>> 跳过 LZ4&ZSTD 补丁..."
