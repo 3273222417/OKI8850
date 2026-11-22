@@ -752,8 +752,12 @@ jobs:
       - name: 核对待打包镜像的内嵌配置
         run: |
           cd kernel_workspace
+          VERIFY_CONFIG_ARGS=()
+          if [[ "${{ inputs.better_net }}" == "true" ]]; then
+            VERIFY_CONFIG_ARGS+=(--allow-hidden-ip6-nf-nat)
+          fi
           python3 "$GITHUB_WORKSPACE/scripts/verify_image_config.py" \
-            common/out/arch/arm64/boot/Image build-evidence/kernel.config
+            "${VERIFY_CONFIG_ARGS[@]}" common/out/arch/arm64/boot/Image build-evidence/kernel.config
           
       - name: 打包匹配的 LZ4/ZSTD ZRAM 模块
         if: ${{ success() && inputs.ksu_type == 'sukisu' && inputs.lz4_enable }}

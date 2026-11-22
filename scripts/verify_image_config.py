@@ -41,14 +41,21 @@ def embedded_config(image: bytes) -> bytes:
     return config
 
 
-def verify(image: Path, expected: Path) -> None:
+def verify(image: Path, expected: Path, allow_hidden_ip6_nf_nat: bool = False) -> None:
     embedded = embedded_config(image.read_bytes())
     expected_bytes = expected.read_bytes()
-    if embedded == expected_bytes:
+    comparison_bytes = expected_bytes
+    if allow_hidden_ip6_nf_nat:
+        visible_value = b"CONFIG_IP6_NF_NAT=y"
+        hidden_value = b"CONFIG_IP6_NF_NAT=n"
+        if expected_bytes.splitlines().count(visible_value) != 1:
+            raise ValueError("expected config must contain exactly one CONFIG_IP6_NF_NAT=y override source")
+        comparison_bytes = expected_bytes.replace(visible_value, hidden_value, 1)
+    if embedded == comparison_bytes:
         return
 
     embedded_lines = embedded.splitlines()
-    expected_lines = expected_bytes.splitlines()
+    expected_lines = comparison_bytes.splitlines()
     line_number = next(
         (index + 1 for index, (left, right) in enumerate(zip(embedded_lines, expected_lines))
          if left != right),
@@ -59,10 +66,10 @@ def verify(image: Path, expected: Path) -> None:
     raise ValueError(
         f"embedded IKCONFIG in {image} differs from {expected}; "
         f"first differing line {line_number}: image={embedded_line!r}, "
-        f"evidence={expected_line!r}; "
-        f"sizes image={len(embedded)} evidence={len(expected_bytes)}; "
+        f"expected={expected_line!r}; "
+        f"sizes image={len(embedded)} expected={len(comparison_bytes)}; "
         f"sha256 image={hashlib.sha256(embedded).hexdigest()} "
-        f"evidence={hashlib.sha256(expected_bytes).hexdigest()}"
+        f"expected={hashlib.sha256(comparison_bytes).hexdigest()}"
     )
 
 
@@ -70,12 +77,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
     parser.add_argument("config", type=Path)
+    parser.add_argument(
+        "--allow-hidden-ip6-nf-nat",
+        action="store_true",
+        help="allow the documented config.patch representation change y -> n in embedded IKCONFIG",
+    )
     args = parser.parse_args()
     try:
-        verify(args.image, args.config)
+        verify(args.image, args.config, args.allow_hidden_ip6_nf_nat)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Image configuration check failed: {exc}\n")
-    print("Image IKCONFIG matches the final build configuration.")
+    if args.allow_hidden_ip6_nf_nat:
+        print("Image IKCONFIG matches the final build configuration with the documented CONFIG_IP6_NF_NAT display override.")
+    else:
+        print("Image IKCONFIG matches the final build configuration.")
 
 
 if __name__ == "__main__":

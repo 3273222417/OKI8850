@@ -101,6 +101,38 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "first differing line 2"):
                 module.verify(image_path, config_path)
 
+    def test_image_config_verifier_allows_only_the_documented_nat_display_override(self):
+        import gzip
+        import importlib.util
+
+        script = ROOT / "scripts/verify_image_config.py"
+        spec = importlib.util.spec_from_file_location("verify_image_config_override", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        embedded = b"CONFIG_IP6_NF_NAT=n\nCONFIG_SECOND=y\n"
+        image = bytearray(64)
+        image[56:60] = b"ARM\x64"
+        image.extend(module.START + gzip.compress(embedded, mtime=0) + module.END)
+        with tempfile.TemporaryDirectory() as temp:
+            image_path = Path(temp) / "Image"
+            config_path = Path(temp) / "kernel.config"
+            image_path.write_bytes(image)
+            config_path.write_bytes(b"CONFIG_IP6_NF_NAT=y\nCONFIG_SECOND=y\n")
+            with self.assertRaisesRegex(ValueError, "first differing line 1"):
+                module.verify(image_path, config_path)
+            module.verify(image_path, config_path, allow_hidden_ip6_nf_nat=True)
+            config_path.write_bytes(b"CONFIG_IP6_NF_NAT=y\nCONFIG_SECOND=n\n")
+            with self.assertRaisesRegex(ValueError, "first differing line 2"):
+                module.verify(image_path, config_path, allow_hidden_ip6_nf_nat=True)
+
+    def test_workflows_scope_ip6_nat_image_override_to_better_net(self):
+        for path, workflow in self.workflows:
+            with self.subTest(workflow=path.name):
+                run = run_step(workflow, "scripts/verify_image_config.py")["run"]
+                self.assertIn('if [[ "${{ inputs.better_net }}" == "true" ]]', run)
+                self.assertIn("--allow-hidden-ip6-nf-nat", run)
+
     def test_kernel_compatibility_resolves_builtin_source_root(self):
         script = read("scripts/apply_sukisu_kernel_compat.sh")
         self.assertIn("KSU_KERNEL_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))", script)
