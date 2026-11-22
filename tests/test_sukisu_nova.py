@@ -74,6 +74,7 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(workflow=path.name):
                 run = run_step(workflow, 'source "./_setup_env.sh"')["run"]
                 self.assertIn("export KLEAF_INTERNAL_NO_BUILD_CONFIG=1 KERNEL_DIR=.", run)
+                self.assertIn('export HOSTCFLAGS="${HOSTCFLAGS:-} -Wno-error=incompatible-pointer-types-discards-qualifiers"', run)
                 self.assertIn('set +u\nsource "./_setup_env.sh" 2>/dev/null || true\nset -u', run)
 
     def test_manager_and_source_evidence_artifacts_exist(self):
@@ -96,6 +97,7 @@ class LocalBuilderTests(unittest.TestCase):
             with self.subTest(builder=path.name):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("export KLEAF_INTERNAL_NO_BUILD_CONFIG=1 KERNEL_DIR=.", text)
+                self.assertIn('export HOSTCFLAGS="${HOSTCFLAGS:-} -Wno-error=incompatible-pointer-types-discards-qualifiers"', text)
                 self.assertIn('KSU_TYPE="SukiSU-Nova"', text)
                 self.assertIn('bash "$SCRIPT_DIR/../scripts/setup_sukisu.sh" "$PWD" "$NOVA_SUSFS"', text)
                 self.assertIn('bash "$SCRIPT_DIR/../scripts/apply_sukisu_susfs.sh" "$PWD"', text)

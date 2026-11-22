@@ -665,6 +665,7 @@ jobs:
           export KCFLAGS
           # 4. 配置其他工具及选项（非必须，防错冗余）
           export HOSTCC=clang
+          export HOSTCFLAGS="${HOSTCFLAGS:-} -Wno-error=incompatible-pointer-types-discards-qualifiers"
           export LD="ld.lld"
           export HOSTLD=ld.lld
           export LLVM=1 LLVM_IAS=1
